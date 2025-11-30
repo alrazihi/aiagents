@@ -105,13 +105,20 @@ class Agent:
         name = tool_call.name
         args = dict(tool_call.args)
 
-        if name == "read_file":
-            return tools.read_file(args["file_path"])
+        try:
+            if name == "read_file":
+                return tools.read_file(**args)
 
-        elif name == "write_file":
-            return tools.write_file(args["file_path"], args["content"])
+            elif name == "write_file":
+                return tools.write_file(**args)
 
-        elif name == "execute_command":
-            return tools.execute_command(args["command"])
+            elif name == "execute_command":
+                return tools.execute_command(**args)
 
-        return f"Unknown tool: {name}"
+            else:
+                print(f"⚠️ Warning: Unknown tool called: {name}")
+                return f"Error: Unknown tool: {name}"
+
+        except Exception as e:
+            print(f"❌ Error executing tool '{name}' with args {args}: {e}")
+            return f"Error executing tool '{name}': {e}"
