@@ -24,8 +24,8 @@ class Agent:
     # SAFE MESSAGE SENDER WITH AUTO RETRY + BACKOFF
     # ======================================================
     def safe_send(self, payload):
-        backoff = 5  # seconds
-        max_backoff = 120  # cap at 2 minutes
+        backoff = settings.initial_backoff_seconds  # Use configurable value
+        max_backoff = settings.max_backoff_seconds  # Use configurable value
 
         while True:
             try:
