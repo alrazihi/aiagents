@@ -1,56 +1,45 @@
-from datetime import datetime
+import argparse
+import os
+from dotenv import load_dotenv
+from my_package.agent import Agent
 
+def main():
+    load_dotenv() # Load environment variables from .env file
 
-class Developer:
-    valid_languages: list[str] = [
-        "Python",
-        "Java",
-        "JavaScript",
-        "C",
-        "C++",
-        "C#",
-        "PHP",
-        "Swift",
-        "Go",
-        "Kotlin",
-        "Ruby",
-        "Rust",
-        "TypeScript",
-        "Scala",
-        "Perl",
-        "Lua",
-        "Groovy",
-        "R",
-        "Shell",
-        "Objective-C",
-        "SQL",
-        "HTML/CSS",
-    ]
+    parser = argparse.ArgumentParser(
+        description="Run the AI agent on a specified directory with a given task."
+    )
+    parser.add_argument(
+        "--directory",
+        type=str,
+        required=True,
+        help="The path to the project directory for the agent to work in."
+    )
+    parser.add_argument(
+        "--task",
+        type=str,
+        required=True,
+        help="The task for the AI agent to perform."
+    )
 
-    def __init__(self, name, language) -> None:
-        if language not in self.valid_languages:
-            raise ValueError(f"{language} is not a valid language.")
-        self.name = name
-        self.language = language
+    args = parser.parse_args()
 
-    def get_info(self) -> str:
-        return f"{self.name} is a developer who codes in {self.language}."
+    # Change to the specified directory
+    try:
+        os.chdir(args.directory)
+        print(f"Changed current working directory to: {os.getcwd()}")
+    except OSError as e:
+        print(f"Error: Could not change to directory {args.directory}: {e}")
+        return
 
+    api_key = os.getenv("GEMINI_API_KEY")
 
-def start_coding() -> None:
-    print("Start coding in Python today!")
+    if not api_key:
+        print("Error: GEMINI_API_KEY not found in environment variables. Please set it in a .env file or your system environment.")
+        return
 
+    agent = Agent(api_key=api_key)
+    agent.run_task(args.task)
 
-def date() -> datetime:
-    current_datetime: datetime = datetime.now()
-    return current_datetime
-
-
-def main() -> None:
-    start_coding()
-    print(date())
-    dev = Developer("Alice", "Python")
-    print(dev.get_info())
-
-
-main()
+if __name__ == "__main__":
+    main()

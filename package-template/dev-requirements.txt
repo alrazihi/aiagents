@@ -2,3 +2,4 @@ pytest
 setuptools
 wheel
 pydantic-settings
+python-dotenv
