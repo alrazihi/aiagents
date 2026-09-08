@@ -1,8 +1,8 @@
 import time
 import google.api_core.exceptions
 import google.generativeai as genai
-from my_package import tools
-from my_package.config import settings
+from gemini_agent_toolkit import tools
+from gemini_agent_toolkit.config import settings
 
 
 class Agent:

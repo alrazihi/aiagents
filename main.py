@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from my_package.agent import Agent
+from gemini_agent_toolkit.agent import Agent
 
 def main():
     load_dotenv()
@@ -19,3 +19,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

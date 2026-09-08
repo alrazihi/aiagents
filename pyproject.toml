@@ -1,0 +1,19 @@
+﻿[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "gemini-agent-toolkit"
+version = "0.1.0"
+description = "Toolkit for building agentic workflows with Google Gemini"
+requires-python = ">=3.11"
+dependencies = [
+    "google-generativeai",
+    "pydantic-settings",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
