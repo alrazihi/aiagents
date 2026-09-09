@@ -1,8 +1,17 @@
+"""Agent that orchestrates a Gemini LLM with tool-calling, guardrails,
+conversation memory, and structured observability.
+
+Uses the ``google.genai`` SDK (v2.x).
+"""
+
+from __future__ import annotations
+
 import time
 import uuid
 
-import google.api_core.exceptions
-import google.generativeai as genai
+import google.genai as genai
+import google.genai.errors as gerrors
+import google.genai.types as types
 
 from gemini_agent_toolkit import tools
 from gemini_agent_toolkit.config import settings
@@ -10,19 +19,104 @@ from gemini_agent_toolkit.guardrails import Guardrails
 from gemini_agent_toolkit.memory import ConversationMemory
 from gemini_agent_toolkit.observability import Metrics, StructuredLogger
 
-RETRYABLE_ERRORS = (
-    google.api_core.exceptions.ResourceExhausted,
-    google.api_core.exceptions.ServiceUnavailable,
-    google.api_core.exceptions.InternalServerError,
-    google.api_core.exceptions.DeadlineExceeded,
-)
+RETRYABLE_STATUSES = frozenset({
+    "RESOURCE_EXHAUSTED",
+    "UNAVAILABLE",
+    "DEADLINE_EXCEEDED",
+    "INTERNAL",
+})
 
-NON_RETRYABLE_ERRORS = (
-    google.api_core.exceptions.PermissionDenied,
-    google.api_core.exceptions.Unauthenticated,
-    google.api_core.exceptions.InvalidArgument,
-    google.api_core.exceptions.NotFound,
-)
+NON_RETRYABLE_STATUSES = frozenset({
+    "PERMISSION_DENIED",
+    "UNAUTHENTICATED",
+    "INVALID_ARGUMENT",
+    "NOT_FOUND",
+})
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Return True if *exc* represents a transient API failure that should
+    be retried with backoff.
+    """
+    if isinstance(exc, gerrors.ServerError):
+        return True
+    if isinstance(exc, gerrors.APIError):
+        status = getattr(exc, "status", None)
+        code = getattr(exc, "code", None)
+        if status in RETRYABLE_STATUSES or code == 429:
+            return True
+    return False
+
+
+def _is_non_retryable_error(exc: Exception) -> bool:
+    """Return True if *exc* represents a permanent failure that should not
+    be retried (e.g. bad credentials, invalid request).
+    """
+    if isinstance(exc, (
+        gerrors.FunctionInvocationError,
+        gerrors.UnknownApiResponseError,
+        gerrors.UnknownFunctionCallArgumentError,
+        gerrors.UnsupportedFunctionError,
+    )):
+        return True
+    if isinstance(exc, gerrors.ClientError):
+        status = getattr(exc, "status", None)
+        code = getattr(exc, "code", None)
+        if status in RETRYABLE_STATUSES or code == 429:
+            return False
+        return True
+    return False
+
+
+def _build_tool_declarations() -> list[types.Tool]:
+    """Build explicit function declarations for the Gemini API.
+
+    The new ``google.genai`` SDK does not auto-convert Python functions;
+    schemas must be declared explicitly.  Each parameter type is restricted
+    to ``STRING`` (the only type our tools accept).
+    """
+    def _str_schema(desc: str) -> types.Schema:
+        return types.Schema(
+            type=types.Type.STRING,
+            description=desc,
+        )
+
+    return [
+        types.Tool(function_declarations=[
+            types.FunctionDeclaration(
+                name="read_file",
+                description="Read a file from the current working directory.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={"file_path": _str_schema("Path to the file to read.")},
+                    required=["file_path"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="write_file",
+                description="Write content to a file in the current working directory.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "file_path": _str_schema("Path to the file to write."),
+                        "content": _str_schema("Content to write to the file."),
+                    },
+                    required=["file_path", "content"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="execute_command",
+                description="Execute a shell command in the current working directory.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "command": _str_schema("The command to execute."),
+                    },
+                    required=["command"],
+                ),
+            ),
+        ])
+    ]
 
 
 class Agent:
@@ -52,18 +146,18 @@ class Agent:
         memory: ConversationMemory | None = None,
         allowed_tools: list[str] | None = None,
     ):
-        genai.configure(api_key=api_key)
+        if not api_key or len(api_key) < 10:
+            raise ValueError("api_key must be a non-empty string of at least 10 characters")
 
-        self.model = genai.GenerativeModel(
-            settings.gemini_model,
-            tools=[
-                tools.read_file,
-                tools.write_file,
-                tools.execute_command,
-            ],
+        self._client = genai.Client(api_key=api_key)
+
+        self.chat = self._client.chats.create(
+            model=settings.gemini_model,
+            config=types.GenerateContentConfig(
+                tools=_build_tool_declarations(),
+            ),
         )
 
-        self.chat = self.model.start_chat(history=[])
         self.logger = StructuredLogger(name="agent")
         self.metrics = Metrics()
         self.memory = memory or ConversationMemory(max_turns=settings.max_turns)
@@ -94,21 +188,24 @@ class Agent:
             try:
                 return self.chat.send_message(payload)
 
-            except NON_RETRYABLE_ERRORS:
-                self.logger.error(
-                    "api_non_retryable_error",
-                    attempt=attempt,
-                    max_retries=max_retries,
-                )
-                raise
+            except Exception as exc:
+                if _is_non_retryable_error(exc) or not _is_retryable_error(exc):
+                    self.logger.error(
+                        "api_non_retryable_error",
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        error=str(exc)[:500],
+                    )
+                    raise
 
-            except RETRYABLE_ERRORS as exc:
                 last_exc = exc
+
                 retry_delay = None
-                if hasattr(exc, "errors") and exc.errors:
-                    err = exc.errors[0]
-                    if "retryDelay" in err:
-                        retry_delay = int(err["retryDelay"].get("seconds", 0))
+                details = getattr(exc, "details", None)
+                if isinstance(details, dict):
+                    err_details = details.get("error", {}).get("details", [])
+                    if err_details and isinstance(err_details[0], dict):
+                        retry_delay = err_details[0].get("retryDelay", {}).get("seconds")
 
                 wait_time = retry_delay if retry_delay else backoff
                 wait_time = min(wait_time, max_backoff)
@@ -154,7 +251,7 @@ class Agent:
         self.memory.add("assistant", final_text)
 
         latency_ms = (time.perf_counter() - start_time) * 1000
-        self.metrics.latency_ms = latency_ms
+        self.metrics.add_latency(latency_ms)
 
         self.logger.info(
             "task_completed",
@@ -227,10 +324,8 @@ class Agent:
             candidate = response.candidates[0]
 
             if candidate.finish_reason == 1:
-                # finish_reason 1 = STOP
                 pass
             elif candidate.finish_reason == 2:
-                # finish_reason 2 = MAX_TOKENS
                 self.logger.warn("max_tokens_reached", correlation_id=correlation_id)
 
             content = candidate.content

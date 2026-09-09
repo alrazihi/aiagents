@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -63,21 +64,33 @@ class StructuredLogger:
 
 class Metrics:
     def __init__(self) -> None:
+        self._lock: threading.Lock = threading.Lock()
         self.tokens_used: int = 0
         self.latency_ms: float = 0.0
         self.tool_calls: int = 0
         self.errors: int = 0
 
     def record_tool_call(self) -> None:
-        self.tool_calls += 1
+        with self._lock:
+            self.tool_calls += 1
 
     def record_error(self) -> None:
-        self.errors += 1
+        with self._lock:
+            self.errors += 1
+
+    def add_tokens(self, count: int) -> None:
+        with self._lock:
+            self.tokens_used += count
+
+    def add_latency(self, ms: float) -> None:
+        with self._lock:
+            self.latency_ms += ms
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "tokens_used": self.tokens_used,
-            "latency_ms": self.latency_ms,
-            "tool_calls": self.tool_calls,
-            "errors": self.errors,
-        }
+        with self._lock:
+            return {
+                "tokens_used": self.tokens_used,
+                "latency_ms": self.latency_ms,
+                "tool_calls": self.tool_calls,
+                "errors": self.errors,
+            }

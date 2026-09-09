@@ -37,4 +37,4 @@ directory, completely breaking the CI pipeline.
 
 - `pyproject.toml` — no BOM, standard build backend
 - `.github/workflows/ci.yml` — CI runs ruff, mypy, pytest
-- `dev-requirements.txt` — includes `google-generativeai` for test imports
+- `dev-requirements.txt` — includes `google-genai` for test imports

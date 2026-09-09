@@ -123,7 +123,8 @@ making the architecture effectively dependency-injected.
 
 | Boundary              | Mechanism                                          |
 |-----------------------|---------------------------------------------------|
-| **API key**           | Loaded from `.env` (git-ignored). Never logged.   |
+| **API key**           | Loaded from `.env` (git-ignored). Never logged.          |
+                       | Validated for minimum length (10 chars) in `Agent.__init__`.|
 | **Tool execution**    | Command allow/deny list; `shell=False`;            |
 |                     | metacharacter rejection; 30s timeout.              |
 | **File access**       | `realpath` + `commonpath` sandbox; rejects         |
@@ -166,14 +167,17 @@ making the architecture effectively dependency-injected.
 | 005 | Guarded agent integration                      |
 | 006 | Case-insensitive guardrail patterns             |
 | 007 | pyproject.toml without BOM                     |
+| 008 | Migrate to google.genai SDK                   |
 
 ## 9. Failure handling
 
 ### Transient API errors
-`safe_send` retries `ResourceExhausted`, `ServiceUnavailable`,
-`InternalServerError`, and `DeadlineExceeded` with exponential backoff
-up to `max_retries` (default 5). Non-retryable errors
-(`PermissionDenied`, `InvalidArgument`, `NotFound`) raise immediately.
+`safe_send` retries `ServerError` (5xx) and `ClientError` with
+`status == "RESOURCE_EXHAUSTED"` (429) using exponential backoff up to
+`max_retries` (default 5). Non-retryable errors — `ClientError` with
+4xx status codes, `FunctionInvocationError`, and related ValueError
+subclasses — raise immediately. Error classification is based on the
+Gemini API's `status` field, not on Python exception types.
 
 ### Tool failures
 `_execute_tool` catches all exceptions, logs them as `tool_error` or
@@ -197,7 +201,7 @@ returned.
 | `ConversationMemory`   | `threading.Lock` on all mutations and reads.   |
 | `LongTermMemory`      | `threading.Lock` + atomic `os.replace` writes.  |
 | `StructuredLogger`    | Thread-safe (Python `logging` is thread-safe).  |
-| `Metrics`             | Not thread-safe (single-agent use case).        |
+| `Metrics`             | Thread-safe (`threading.Lock` on all mutations).      |
 | `Agent`               | Not thread-safe (single-agent use case).        |
 
 The `Agent` is designed for single-agent, single-thread execution.
@@ -208,7 +212,7 @@ agent).
 ## 11. Testing strategy
 
 - **Unit tests**: test each module in isolation.
-  `agent.py` tests mock the `google.generativeai` module entirely.
+  `agent.py` tests mock the `google.genai` module entirely.
 - **Integration tests**: test the agent flow with mocked Gemini
   responses (tool calls → tool execution → final text).
 - **Security boundary tests**: path traversal, symlink escape, prefix
@@ -217,7 +221,7 @@ agent).
   safety filter blocks, command timeouts, unknown tools.
 - **Concurrency tests**: concurrent `ConversationMemory.add`, concurrent
   `LongTermMemory.save` to same key.
-- **Test count**: 109 passing, 2 skipped (platform-specific symlink tests).
+- **Test count**: 123 passing, 2 skipped (platform-specific symlink tests).
 - **Command**: `pytest -v`
 
 ## 12. Observability
@@ -285,10 +289,7 @@ GitHub Actions runs on every push and PR:
    scenarios.
 3. **No multi-tenancy**: The agent runs with a single API key and has no
    concept of users or tenants.
-4. **`google.generativeai` deprecation**: The `google-generativeai`
-   package is deprecated by Google in favor of `google.genai`. Migration
-   is future work.
-5. **Symlink tests skipped on Windows**: Tests that create symlinks
+4. **Symlink tests skipped on Windows**: Tests that create symlinks
    require administrator privileges on Windows and are skipped.
 6. **`echo` unavailable with `shell=False`**: Shell built-ins like
    `echo` cannot be executed because the command runner uses
@@ -296,8 +297,7 @@ GitHub Actions runs on every push and PR:
 
 ## 15. Future work
 
-1. Migrate from `google.generativeai` to `google.genai` (new SDK).
-2. Add token counting to `Metrics` (parse `usage_metadata` from
+1. Add token counting to `Metrics` (parse `usage_metadata` from
    Gemini responses).
 3. Add a `--verbose` / `--quiet` flag to control log level.
 4. Add integration tests that verify end-to-end behavior with a mock

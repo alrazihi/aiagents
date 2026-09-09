@@ -104,3 +104,45 @@ def test_metrics_record_latency():
     m = Metrics()
     m.latency_ms = 42.0
     assert m.to_dict()["latency_ms"] == 42.0
+
+
+def test_metrics_thread_safe_concurrent_updates():
+    import threading
+    m = Metrics()
+    threads = [
+        threading.Thread(
+            target=lambda: [m.record_tool_call() for _ in range(100)]
+        )
+        for _ in range(10)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert m.tool_calls == 1000
+
+
+def test_metrics_add_tokens_and_latency():
+    m = Metrics()
+    m.add_tokens(50)
+    m.add_tokens(30)
+    m.add_latency(10.5)
+    m.add_latency(20.0)
+    assert m.tokens_used == 80
+    assert m.latency_ms == 30.5
+
+
+def test_metrics_record_error_thread_safe():
+    import threading
+    m = Metrics()
+    threads = [
+        threading.Thread(
+            target=lambda: [m.record_error() for _ in range(50)]
+        )
+        for _ in range(8)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert m.errors == 400
