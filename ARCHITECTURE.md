@@ -168,6 +168,7 @@ making the architecture effectively dependency-injected.
 | 006 | Case-insensitive guardrail patterns             |
 | 007 | pyproject.toml without BOM                     |
 | 008 | Migrate to google.genai SDK                   |
+| 009 | Production hardening: rate limiting, health    |
 
 ## 9. Failure handling
 
@@ -176,13 +177,17 @@ making the architecture effectively dependency-injected.
 `status == "RESOURCE_EXHAUSTED"` (429) using exponential backoff up to
 `max_retries` (default 5). Non-retryable errors — `ClientError` with
 4xx status codes, `FunctionInvocationError`, and related ValueError
-subclasses — raise immediately. Error classification is based on the
+subclasses — raise immediately. Unknown errors (not classified as
+either retryable or non-retryable) also raise immediately rather than
+being silently retried. Error classification is based on the
 Gemini API's `status` field, not on Python exception types.
 
 ### Tool failures
-`_execute_tool` catches all exceptions, logs them as `tool_error` or
-`tool_permission_denied`, and returns a user-facing error string to the
-model. The error metric is incremented. The agent continues its loop.
+`_execute_tool` validates tool call arguments before dispatch (type and
+presence checking via `_filter_args`).  All exceptions are logged as
+`tool_error` or `tool_permission_denied` and return generic, non-leaking
+error strings to the model.  The error metric is incremented.
+The agent continues its loop.
 
 ### Safety filter blocks
 If the Gemini model returns empty candidates (response blocked by
@@ -190,9 +195,11 @@ safety filters), `_consume_response` returns a descriptive error
 message instead of crashing on `IndexError`.
 
 ### Command timeouts
-`execute_command` enforces a 30-second timeout via
-`subprocess.TimeoutExpired`. The command is killed and an error is
-returned.
+`execute_command` enforces a configurable timeout
+(`command_timeout_seconds`, default 30s) via
+`subprocess.TimeoutExpired`.  The command is killed and a generic error
+is returned.  Error messages do not leak internal paths or command
+details.
 
 ## 10. Concurrency model
 
@@ -200,8 +207,10 @@ returned.
 |------------------------|-------------------------------------------------|
 | `ConversationMemory`   | `threading.Lock` on all mutations and reads.   |
 | `LongTermMemory`      | `threading.Lock` + atomic `os.replace` writes.  |
-| `StructuredLogger`    | Thread-safe (Python `logging` is thread-safe).  |
+| `StructuredLogger`    | Thread-safe: `logging` is thread-safe; handler dedup   |
+|                     | uses a class-level `_handler_lock`.                      |
 | `Metrics`             | Thread-safe (`threading.Lock` on all mutations).      |
+| `RateLimiter`        | Thread-safe (`threading.Lock` + `deque` timestamps).  |
 | `Agent`               | Not thread-safe (single-agent use case).        |
 
 The `Agent` is designed for single-agent, single-thread execution.
@@ -221,7 +230,7 @@ agent).
   safety filter blocks, command timeouts, unknown tools.
 - **Concurrency tests**: concurrent `ConversationMemory.add`, concurrent
   `LongTermMemory.save` to same key.
-- **Test count**: 123 passing, 2 skipped (platform-specific symlink tests).
+- **Test count**: 133 passing, 2 skipped (platform-specific symlink tests).
 - **Command**: `pytest -v`
 
 ## 12. Observability
@@ -246,11 +255,23 @@ Key events:
 - `task_completed` — final metrics and text length
 
 ### Metrics
-`Metrics` tracks in-process counters:
+`Metrics` tracks in-process counters (all thread-safe via `threading.Lock`):
 - `tokens_used` — (placeholder for future token counting)
-- `latency_ms` — total task latency
+- `latency_ms` — total task latency (accumulated via `add_latency`)
 - `tool_calls` — number of tool invocations
 - `errors` — tool errors and permission denials
+
+### Rate limiting
+`RateLimiter` implements a sliding-window rate limiter.  Each `Agent`
+instance has its own limiter configured via `rate_limit_requests` and
+`rate_limit_window_seconds` (defaults: 60 per 60s).  When the limit is
+exceeded, `safe_send` raises `RuntimeError` with a `rate_limit_exceeded`
+log event.
+
+### Health check
+`Agent.health_check(api_key)` performs a lightweight self-test: validates
+the API key format, creates a `genai.Client`, and calls `models.list()`
+with a minimal config.  Returns `{"healthy": bool, "detail": str}`.
 
 ### What operators can observe
 - Whether a task is running (via log stream).
@@ -266,7 +287,15 @@ Key events:
 pip install -e ".[dev]"
 cp .env.example .env
 # Edit .env with your Gemini API key
-python -m gemini_agent_toolkit --directory . --task "Summarize README.md"
+
+# Run a single task:
+python main.py --directory . --task "Summarize ARCHITECTURE.md"
+
+# Run a health check:
+python main.py --health-check
+
+# Interactive REPL:
+python main.py --directory .
 ```
 
 ### Interactive mode

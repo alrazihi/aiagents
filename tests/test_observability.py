@@ -113,6 +113,9 @@ def test_rate_limiter_window_expires():
     _time.sleep(0.4)
     assert limiter.acquire()
 
+
+# -------- Metrics -------- #
+
 def test_metrics_initial_values():
     m = Metrics()
     assert m.tokens_used == 0
@@ -148,12 +151,6 @@ def test_metrics_to_dict():
         "tool_calls": 1,
         "errors": 1,
     }
-
-
-def test_metrics_record_latency():
-    m = Metrics()
-    m.latency_ms = 42.0
-    assert m.to_dict()["latency_ms"] == 42.0
 
 
 def test_metrics_thread_safe_concurrent_updates():

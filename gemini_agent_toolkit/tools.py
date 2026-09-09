@@ -87,8 +87,8 @@ def read_file(file_path: str) -> str:
         safe_path = sanitize_path(file_path)
         with open(safe_path, encoding="utf-8") as f:
             return f.read()
-    except Exception as e:
-        return f"Error reading file: {e}"
+    except (ValueError, OSError):
+        return "Error: Unable to read file."
 
 
 def write_file(file_path: str, content: str) -> str:
@@ -98,9 +98,9 @@ def write_file(file_path: str, content: str) -> str:
         Path(os.path.dirname(safe_path)).mkdir(parents=True, exist_ok=True)
         with open(safe_path, "w", encoding="utf-8") as f:
             f.write(content)
-        return f"File '{file_path}' written successfully."
-    except Exception as e:
-        return f"Error writing file: {e}"
+        return "File written successfully."
+    except (ValueError, OSError):
+        return "Error: Unable to write file."
 
 
 # -------- COMMAND EXECUTION -------- #
@@ -159,6 +159,6 @@ def execute_command(command: str) -> str:
             f"Error: Command timed out after {settings.command_timeout_seconds} seconds."
         )
     except FileNotFoundError:
-        return f"Error: Command not found: {parts[0]}"
-    except Exception as e:
-        return f"Error executing command: {e}"
+        return "Error: Command not found."
+    except Exception:
+        return "Error: Command execution failed."

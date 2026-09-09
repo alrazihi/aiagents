@@ -43,11 +43,38 @@ class AgentError(Exception):
         self.details = details
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "code": self.code,
-            "message": str(self),
-            **self.details,
-        }
+        result: dict[str, object] = {"code": self.code, "message": str(self)}
+        for key, value in self.details.items():
+            if key not in ("code", "message"):
+                result[key] = value
+        return result
+
+
+def _filter_args(args: dict[str, object], allowed_keys: set[str]) -> dict[str, str]:
+    """Extract only *allowed_keys* from *args*.
+
+    Raises AgentError if any allowed key is missing or has the wrong type.
+    """
+    result: dict[str, str] = {}
+    for key in allowed_keys:
+        if key not in args:
+            raise AgentError(
+                f"Missing required argument: {key}",
+                code="MISSING_ARGUMENT",
+            )
+        value = args[key]
+        if not isinstance(value, str):
+            raise AgentError(
+                f"Argument '{key}' must be a string",
+                code="INVALID_ARGUMENT_TYPE",
+            )
+        result[key] = value
+    return result
+
+
+def _get_error_status(exc: Exception) -> str | None:
+    """Extract the Gemini API status string from *exc*, if present."""
+    return getattr(exc, "status", None)
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -57,7 +84,7 @@ def _is_retryable_error(exc: Exception) -> bool:
     if isinstance(exc, gerrors.ServerError):
         return True
     if isinstance(exc, gerrors.APIError):
-        status = getattr(exc, "status", None)
+        status = _get_error_status(exc)
         code = getattr(exc, "code", None)
         if status in RETRYABLE_STATUSES or code == 429:
             return True
@@ -76,7 +103,7 @@ def _is_non_retryable_error(exc: Exception) -> bool:
     )):
         return True
     if isinstance(exc, gerrors.ClientError):
-        status = getattr(exc, "status", None)
+        status = _get_error_status(exc)
         code = getattr(exc, "code", None)
         if status in RETRYABLE_STATUSES or code == 429:
             return False
@@ -197,12 +224,16 @@ class Agent:
             return {"healthy": False, "detail": "Invalid API key format"}
         try:
             client = genai.Client(api_key=api_key)
-            client.models.list()
+            client.models.list(config=types.ListModelsConfig(page_size=1))
             return {"healthy": True, "detail": "OK"}
         except gerrors.APIError as e:
-            return {"healthy": False, "detail": f"API error: {e.status}"}
+            status = _get_error_status(e)
+            return {"healthy": False, "detail": f"API error: {status or 'UNKNOWN'}"}
         except Exception as e:
-            return {"healthy": False, "detail": f"Unexpected error: {type(e).__name__}"}
+            return {
+                "healthy": False,
+                "detail": f"Unexpected error: {type(e).__name__}",
+            }
 
     # ======================================================
     # SAFE MESSAGE SENDER WITH CONFIGURABLE RETRY + BACKOFF
@@ -238,9 +269,20 @@ class Agent:
                 return self.chat.send_message(payload)
 
             except Exception as exc:
-                if _is_non_retryable_error(exc) or not _is_retryable_error(exc):
+                if _is_non_retryable_error(exc):
+                    self.metrics.record_error()
                     self.logger.error(
                         "api_non_retryable_error",
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        error=str(exc)[:500],
+                    )
+                    raise
+
+                if not _is_retryable_error(exc):
+                    self.metrics.record_error()
+                    self.logger.error(
+                        "api_unknown_error",
                         attempt=attempt,
                         max_retries=max_retries,
                         error=str(exc)[:500],
@@ -323,20 +365,20 @@ class Agent:
     # ======================================================
     def _execute_tool(self, tool_call) -> str:
         name = tool_call.name
-        args = {k: v for k, v in tool_call.args.items()}
+        args = dict(tool_call.args)
 
         try:
             self.guardrails.check_tool_permission(name, self.allowed_tools)
 
             if name == "read_file":
-                return tools.read_file(**args)
+                return tools.read_file(**_filter_args(args, {"file_path"}))
             elif name == "write_file":
-                return tools.write_file(**args)
+                return tools.write_file(**_filter_args(args, {"file_path", "content"}))
             elif name == "execute_command":
-                return tools.execute_command(**args)
+                return tools.execute_command(**_filter_args(args, {"command"}))
             else:
                 self.logger.warn("unknown_tool", tool=name)
-                return f"Error: Unknown tool: {name}"
+                return "Error: Unknown tool requested."
 
         except PermissionError as e:
             self.metrics.record_error()
@@ -354,7 +396,7 @@ class Agent:
                 tool=name,
                 error=str(e),
             )
-            return f"Error executing tool '{name}': {e}"
+            return f"Error executing tool '{name}'."
 
     # ======================================================
     # RESPONSE CONSUMPTION

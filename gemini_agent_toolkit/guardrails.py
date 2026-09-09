@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-MAX_PROMPT_LENGTH = 4000
+from gemini_agent_toolkit.config import settings
+
+MAX_PROMPT_LENGTH = settings.max_prompt_length
 
 BLOCKED_PATTERNS = [
     re.compile(r"rm\s+-rf\s+/", re.IGNORECASE),
