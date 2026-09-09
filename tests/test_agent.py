@@ -9,7 +9,6 @@ from google.genai.errors import (
 )
 
 from gemini_agent_toolkit.agent import (
-    NON_RETRYABLE_STATUSES,
     RETRYABLE_STATUSES,
     Agent,
     AgentError,
@@ -128,11 +127,6 @@ def test_non_retryable_error_classification():
 def test_retryable_statuses_contains_expected():
     assert "RESOURCE_EXHAUSTED" in RETRYABLE_STATUSES
     assert "UNAVAILABLE" in RETRYABLE_STATUSES
-
-
-def test_non_retryable_statuses_contains_expected():
-    assert "PERMISSION_DENIED" in NON_RETRYABLE_STATUSES
-    assert "INVALID_ARGUMENT" in NON_RETRYABLE_STATUSES
 
 
 # -------- safe_send tests -------- #

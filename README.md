@@ -31,7 +31,14 @@ python main.py --directory . --task "Summarize README.md"
 ## CLI Usage
 
 ```bash
-python -m gemini_agent_toolkit --directory . --task "Summarize README.md"
+# Run a single task:
+python main.py --directory . --task "Summarize README.md"
+
+# Run a health check:
+python main.py --health-check
+
+# Interactive REPL:
+python main.py --directory .
 ```
 
 ## Library Usage
@@ -53,7 +60,7 @@ print(result)
 pytest -v
 ```
 
-109 tests pass (2 skipped on Windows for symlink permissions). Tests cover
+132 tests pass (2 skipped on Windows for symlink permissions). Tests cover
 unit behavior, security boundaries, failure paths, concurrency, and
 end-to-end agent flows with mocked Gemini responses.
 

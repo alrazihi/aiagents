@@ -26,13 +26,6 @@ RETRYABLE_STATUSES = frozenset({
     "INTERNAL",
 })
 
-NON_RETRYABLE_STATUSES = frozenset({
-    "PERMISSION_DENIED",
-    "UNAUTHENTICATED",
-    "INVALID_ARGUMENT",
-    "NOT_FOUND",
-})
-
 
 class AgentError(Exception):
     """Base exception with a structured error code for programmatic handling."""
