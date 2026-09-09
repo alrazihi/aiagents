@@ -3,3 +3,4 @@ setuptools
 wheel
 pydantic-settings
 python-dotenv
+google-generativeai

@@ -4,25 +4,38 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class StructuredLogger:
-    def __init__(self, name: str = "agent", log_path: Optional[str] = None):
+    """JSON-lines structured logger with optional file output.
+
+    Each ``StructuredLogger`` instance resolves a single underlying
+    ``logging.Logger`` by name.  Handlers are attached only once per
+    logger to prevent duplicate log lines when multiple instances share
+    the same name.
+    """
+
+    _initialized: set[str] = set()
+
+    def __init__(self, name: str = "agent", log_path: str | None = None):
+        self.name = name
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        self.logger.addHandler(handler)
+        if name not in StructuredLogger._initialized:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self.logger.addHandler(handler)
+            StructuredLogger._initialized.add(name)
         self._log_path = Path(log_path) if log_path else None
         if self._log_path:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _emit(self, level: str, event: str, **kwargs: Any) -> None:
         payload = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": level,
             "event": event,
             **kwargs,
@@ -61,7 +74,7 @@ class Metrics:
     def record_error(self) -> None:
         self.errors += 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "tokens_used": self.tokens_used,
             "latency_ms": self.latency_ms,

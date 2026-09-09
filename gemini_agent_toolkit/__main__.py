@@ -1,7 +1,10 @@
 import argparse
 import os
+
 from dotenv import load_dotenv
+
 from gemini_agent_toolkit.agent import Agent
+
 
 def main():
     load_dotenv() # Load environment variables from .env file
@@ -35,7 +38,10 @@ def main():
     api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
-        print("Error: GEMINI_API_KEY not found in environment variables. Please set it in a .env file or your system environment.")
+        print(
+            "Error: GEMINI_API_KEY not found. Set it in .env or "
+            "your system environment."
+        )
         return
 
     agent = Agent(api_key=api_key)

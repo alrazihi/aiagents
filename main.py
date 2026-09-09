@@ -1,6 +1,9 @@
 import os
+
 from dotenv import load_dotenv
+
 from gemini_agent_toolkit.agent import Agent
+
 
 def main():
     load_dotenv()
@@ -15,7 +18,11 @@ def main():
         task = input("> ")
         if task.lower() == 'exit':
             break
-        agent.run_task(task)
+        try:
+            result = agent.run_task(task)
+            print(result)
+        except Exception as e:
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
     main()

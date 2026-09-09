@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List
+from typing import Any
 
 
 @dataclass
 class TaskCase:
     name: str
     prompt: str
-    expected_tools: List[str] = field(default_factory=list)
-    validator: Optional[Callable[[str], bool]] = None
+    expected_tools: list[str] = field(default_factory=list)
+    validator: Callable[[Any], bool] | None = None
 
 
 @dataclass
@@ -23,37 +23,46 @@ class TaskResult:
     success: bool
     tool_accuracy: float
     latency_ms: float
-    tokens_used: Optional[int] = None
-    error: Optional[str] = None
+    tokens_used: int | None = None
+    error: str | None = None
 
 
 class EvaluationHarness:
     def __init__(self):
-        self.results: List[TaskResult] = []
+        self.results: list[TaskResult] = []
 
-    def run(self, agent, cases: List[TaskCase]) -> Dict[str, float]:
+    def run(self, agent, cases: list[TaskCase]) -> dict[str, float]:
         self.results = []
         for case in cases:
             start = time.perf_counter()
             try:
                 response = agent.run_task(case.prompt)
                 latency = (time.perf_counter() - start) * 1000
-                success = bool(case.validator(case.prompt)) if case.validator else True
+                if case.validator is not None:
+                    success = bool(case.validator(response))
+                else:
+                    success = True
                 tool_accuracy = self._compute_tool_accuracy(case, response)
-                self.results.append(TaskResult(task=case, success=success, tool_accuracy=tool_accuracy, latency_ms=latency))
+                self.results.append(TaskResult(
+                    task=case, success=success, tool_accuracy=tool_accuracy,
+                    latency_ms=latency,
+                ))
             except Exception as exc:
                 latency = (time.perf_counter() - start) * 1000
-                self.results.append(TaskResult(task=case, success=False, tool_accuracy=0.0, latency_ms=latency, error=str(exc)))
+                self.results.append(TaskResult(
+                    task=case, success=False, tool_accuracy=0.0,
+                    latency_ms=latency, error=str(exc),
+                ))
 
         return self._summary()
 
     def _compute_tool_accuracy(self, case: TaskCase, response: str) -> float:
         if not case.expected_tools:
             return 1.0
-        hits = sum(1 for tool in case.expected_tools if tool in response)
+        hits = sum(1 for tool in case.expected_tools if tool in (response or ""))
         return hits / len(case.expected_tools)
 
-    def _summary(self) -> Dict[str, float]:
+    def _summary(self) -> dict[str, float]:
         if not self.results:
             return {}
         success_rate = sum(1 for r in self.results if r.success) / len(self.results)
@@ -66,7 +75,7 @@ class EvaluationHarness:
         }
 
     @staticmethod
-    def _percentile(values: List[float], p: float) -> float:
+    def _percentile(values: list[float], p: float) -> float:
         if not values:
             return 0.0
         values = sorted(values)
