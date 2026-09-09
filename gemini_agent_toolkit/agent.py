@@ -268,7 +268,8 @@ class Agent:
                         "api_non_retryable_error",
                         attempt=attempt,
                         max_retries=max_retries,
-                        error=str(exc)[:500],
+                        error_type=type(exc).__name__,
+                        status=_get_error_status(exc),
                     )
                     raise
 
@@ -278,7 +279,7 @@ class Agent:
                         "api_unknown_error",
                         attempt=attempt,
                         max_retries=max_retries,
-                        error=str(exc)[:500],
+                        error_type=type(exc).__name__,
                     )
                     raise
 
@@ -299,7 +300,8 @@ class Agent:
                     attempt=attempt,
                     max_retries=max_retries,
                     wait_seconds=wait_time,
-                    error=str(exc)[:500],
+                    error_type=type(exc).__name__,
+                    status=_get_error_status(exc),
                 )
 
                 if attempt < max_retries:
@@ -317,6 +319,12 @@ class Agent:
 
         Returns the final text response from the model.
         """
+        if not isinstance(task, str):
+            raise AgentError(
+                "Task must be a string",
+                code="INVALID_TASK_TYPE",
+            )
+
         try:
             self.guardrails.validate_input(task)
         except ValueError as e:
@@ -328,7 +336,8 @@ class Agent:
         start_time = time.perf_counter()
         self.logger.info(
             "task_started",
-            task=task,
+            task_length=len(task),
+            task_prefix=task[:100] if task else "",
             correlation_id=correlation_id,
         )
 
@@ -344,7 +353,7 @@ class Agent:
 
         self.logger.info(
             "task_completed",
-            task=task,
+            task_length=len(task),
             correlation_id=correlation_id,
             final_text_length=len(final_text),
             tool_calls=self.metrics.tool_calls,
@@ -398,11 +407,22 @@ class Agent:
         """Process a model response, executing tool calls as needed.
 
         Handles safety-filter blocks (empty candidates) and returns the
-        accumulated final text.
+        accumulated final text.  Enforces a maximum iteration count to
+        prevent infinite tool-call loops.
         """
         final_text = ""
+        iterations = 0
+        max_iterations = settings.max_tool_iterations
 
         while True:
+            if iterations >= max_iterations:
+                self.logger.error(
+                    "max_tool_iterations_exceeded",
+                    iterations=iterations,
+                    max_iterations=max_iterations,
+                    correlation_id=correlation_id,
+                )
+                return "Error: Maximum tool iterations exceeded."
             if not response.candidates:
                 self.logger.error(
                     "safety_filter_blocked",
@@ -446,6 +466,7 @@ class Agent:
                     })
 
             if has_tool_call:
+                iterations += 1
                 response = self.safe_send(tool_responses)
                 continue
 

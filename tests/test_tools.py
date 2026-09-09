@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from gemini_agent_toolkit.tools import (
-    BLOCKED_COMMANDS,
+    _allowed_commands,
     execute_command,
     get_base_dir,
     is_safe_path,
@@ -145,10 +145,10 @@ def test_execute_command_empty_command():
     assert "Error" in result or "Empty" in result
 
 
-def test_execute_command_not_found(tmp_path, monkeypatch):
+def test_execute_command_not_in_allowlist(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = execute_command("nonexistent_command_xyz123")
-    assert "not found" in result.lower() or "Error" in result
+    assert "not in the allowed list" in result.lower() or "blocked" in result.lower()
 
 
 def test_execute_command_allows_safe_command(tmp_path, monkeypatch):
@@ -170,8 +170,14 @@ def test_execute_command_timeout(tmp_path, monkeypatch):
     assert "timeout" in result.lower() or "timed out" in result.lower()
 
 
-def test_blocked_commands_list_is_frozen():
-    assert isinstance(BLOCKED_COMMANDS, frozenset)
+def test_allowed_commands_list_is_frozen():
+    assert isinstance(_allowed_commands(), frozenset)
+    assert "ls" in _allowed_commands()
+
+
+def test_execute_command_blocks_disallowed_command():
+    result = execute_command("python --version")
+    assert "blocked" in result.lower()
 
 
 def test_get_base_dir_resolves_symlinks(tmp_path, monkeypatch):

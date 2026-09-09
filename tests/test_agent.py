@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import google.genai.errors as gerrors
@@ -518,3 +519,63 @@ def test_run_task_logs_rate_limit_event(agent, caplog):
         for record in caplog.records
     )
     assert logged
+
+
+# -------- Input validation -------- #
+
+def test_run_task_raises_on_non_string_input(agent):
+    a, _ = agent
+    with pytest.raises(AgentError) as exc_info:
+        a.run_task(None)
+    assert exc_info.value.code == "INVALID_TASK_TYPE"
+
+
+def test_run_task_raises_on_non_string_input_list(agent):
+    a, _ = agent
+    with pytest.raises(AgentError) as exc_info:
+        a.run_task(["not a string"])
+    assert exc_info.value.code == "INVALID_TASK_TYPE"
+
+
+# -------- max_tool_iterations -------- #
+
+def test_run_task_stops_at_max_tool_iterations(agent, tmp_path, monkeypatch):
+    a, mock_chat = agent
+    (tmp_path / "f.txt").write_text("x")
+    monkeypatch.chdir(tmp_path)
+    tool_response = make_tool_call_response("read_file", {"file_path": "f.txt"})
+    mock_chat.send_message.side_effect = [tool_response] * 20
+    with patch("gemini_agent_toolkit.agent.settings") as mock_settings:
+        mock_settings.max_tool_iterations = 3
+        mock_settings.max_retries = 5
+        mock_settings.initial_backoff_seconds = 0
+        mock_settings.max_backoff_seconds = 1
+        mock_settings.rate_limit_requests = 1000
+        result = a.run_task("Read f.txt repeatedly")
+    assert "Maximum tool iterations" in result
+    assert mock_chat.send_message.call_count <= 4
+
+
+def test_run_task_logs_task_length_not_full_text(agent, caplog):
+    a, mock_chat = agent
+    mock_chat.send_message.return_value = make_text_response("Done")
+    with caplog.at_level("INFO"):
+        a.run_task("Hello world this is a test")
+    for record in caplog.records:
+        if "task_started" in record.getMessage():
+            payload = json.loads(record.getMessage())
+            assert "task_length" in payload
+            assert "task" not in payload
+
+
+def test_safe_send_logs_error_type_not_message(agent, mock_genai, mock_sleep, caplog):
+    _, mock_chat = mock_genai
+    mock_chat.send_message.side_effect = _permission_error()
+    a = Agent(api_key="test-api-key-12345")
+    with pytest.raises(ClientError):
+        a.safe_send("test")
+    error_logs = [r for r in caplog.records if "non_retryable" in r.getMessage()]
+    assert error_logs
+    payload = json.loads(error_logs[-1].getMessage())
+    assert "error_type" in payload
+    assert "error" not in payload  # No raw error message leaked

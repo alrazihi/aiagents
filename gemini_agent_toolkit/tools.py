@@ -3,7 +3,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from gemini_agent_toolkit.config import settings
+from gemini_agent_toolkit.config import parse_allowed_commands, settings
 
 
 def get_base_dir() -> str:
@@ -15,17 +15,12 @@ def get_base_dir() -> str:
     return os.path.realpath(os.getcwd())
 
 
-# Commands that are too dangerous to ever execute, even inside the sandbox.
-BLOCKED_COMMANDS = frozenset({
-    "rm", "rmdir", "del", "format", "fdisk", "mkfs",
-    "chmod", "chown", "icacls",
-    "curl", "wget", "nc", "ncat", "netcat",
-    "python", "python3", "pip", "pip3",
-    "git", "svn", "hg",
-    "sudo", "su", "runas",
-    "shutdown", "reboot", "halt",
-    "taskkill", "kill", "pkill",
-})
+def _allowed_commands() -> frozenset[str]:
+    """Return the set of commands the agent is permitted to execute.
+
+    Configured via the ``allowed_commands`` setting (comma-separated).
+    """
+    return parse_allowed_commands(settings.allowed_commands)
 
 
 # -------- SECURITY HELPERS -------- #
@@ -123,9 +118,10 @@ def execute_command(command: str) -> str:
             if ".." in p.split(os.path.sep) or ".." in p.split("/"):
                 return f"Command blocked: '{p}' contains path traversal."
 
-        # Block dangerous commands.
-        if parts[0] in BLOCKED_COMMANDS:
-            return f"Command blocked: '{parts[0]}' is not allowed for security."
+        # Only allow commands in the allowlist.
+        allowed = _allowed_commands()
+        if parts[0] not in allowed:
+            return f"Command blocked: '{parts[0]}' is not in the allowed list."
 
         # Reject shell metacharacters in any argument.
         dangerous_chars = set(";|&`$(){}<>\\\n\r")
