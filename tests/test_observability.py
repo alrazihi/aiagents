@@ -1,6 +1,6 @@
 import json
 
-from gemini_agent_toolkit.observability import Metrics, StructuredLogger
+from gemini_agent_toolkit.observability import Metrics, RateLimiter, StructuredLogger
 
 # -------- StructuredLogger (existing) -------- #
 
@@ -61,7 +61,57 @@ def test_multiple_loggers_same_name_no_duplicate_handlers():
     assert handler_count_1 == handler_count_2
 
 
-# -------- Metrics (new) -------- #
+# -------- StructuredLogger: log levels -------- #
+
+def test_structured_logger_respects_log_level(caplog):
+    logger = StructuredLogger(name="test_level", log_level="ERROR")
+    logger.info("should_not_appear")
+    logger.error("should_appear")
+    messages = [r.message for r in caplog.records]
+    assert any("should_appear" in m for m in messages)
+    assert not any("should_not_appear" in m for m in messages)
+
+
+def test_handler_lock_prevents_duplicates_under_concurrency():
+    import threading
+    """Creating many loggers concurrently should never produce duplicate handlers."""
+    results: list[int] = []
+
+    def make_logger():
+        logger = StructuredLogger(name="concurrent_dedup")
+        results.append(len(logger.logger.handlers))
+
+    threads = [threading.Thread(target=make_logger) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(h == results[0] for h in results)
+    assert results[0] <= 2  # StreamHandler + optional file handler
+
+
+# -------- RateLimiter -------- #
+
+def test_rate_limiter_allows_under_limit():
+    limiter = RateLimiter(max_requests=5, window_seconds=1.0)
+    allowed = [limiter.acquire() for _ in range(5)]
+    assert all(allowed)
+
+
+def test_rate_limiter_blocks_over_limit():
+    limiter = RateLimiter(max_requests=3, window_seconds=1.0)
+    results = [limiter.acquire() for _ in range(5)]
+    assert results == [True, True, True, False, False]
+
+
+def test_rate_limiter_window_expires():
+    import time as _time
+    limiter = RateLimiter(max_requests=2, window_seconds=0.3)
+    assert limiter.acquire()
+    assert limiter.acquire()
+    assert not limiter.acquire()
+    _time.sleep(0.4)
+    assert limiter.acquire()
 
 def test_metrics_initial_values():
     m = Metrics()

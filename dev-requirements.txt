@@ -1,8 +1,8 @@
-pytest
-setuptools
-wheel
-pydantic-settings
-python-dotenv
-google-genai
-ruff
-mypy
+pytest>=8.0.0,<9.0.0
+setuptools>=68,<90
+wheel>=0.40,<1.0
+pydantic-settings>=2.0.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+google-genai>=2.1.0,<3.0.0
+ruff>=0.8.0,<1.0.0
+mypy>=1.13.0,<2.0.0

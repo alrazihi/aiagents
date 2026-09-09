@@ -17,7 +17,7 @@ from gemini_agent_toolkit import tools
 from gemini_agent_toolkit.config import settings
 from gemini_agent_toolkit.guardrails import Guardrails
 from gemini_agent_toolkit.memory import ConversationMemory
-from gemini_agent_toolkit.observability import Metrics, StructuredLogger
+from gemini_agent_toolkit.observability import Metrics, RateLimiter, StructuredLogger
 
 RETRYABLE_STATUSES = frozenset({
     "RESOURCE_EXHAUSTED",
@@ -32,6 +32,22 @@ NON_RETRYABLE_STATUSES = frozenset({
     "INVALID_ARGUMENT",
     "NOT_FOUND",
 })
+
+
+class AgentError(Exception):
+    """Base exception with a structured error code for programmatic handling."""
+
+    def __init__(self, message: str, code: str = "AGENT_ERROR", **details: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "code": self.code,
+            "message": str(self),
+            **self.details,
+        }
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -155,16 +171,38 @@ class Agent:
             model=settings.gemini_model,
             config=types.GenerateContentConfig(
                 tools=_build_tool_declarations(),
+                max_output_tokens=settings.max_response_length,
             ),
         )
 
-        self.logger = StructuredLogger(name="agent")
+        self.logger = StructuredLogger(name="agent", log_level=settings.log_level)
         self.metrics = Metrics()
         self.memory = memory or ConversationMemory(max_turns=settings.max_turns)
         self.guardrails = guardrails or Guardrails()
         self.allowed_tools = allowed_tools or [
             "read_file", "write_file", "execute_command",
         ]
+        self.rate_limiter = RateLimiter(
+            max_requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+
+    @classmethod
+    def health_check(cls, api_key: str) -> dict[str, object]:
+        """Quick self-test: verify the API key is valid and the client connects.
+
+        Returns a dict with ``healthy`` (bool) and ``detail`` (str).
+        """
+        if not api_key or len(api_key) < 10:
+            return {"healthy": False, "detail": "Invalid API key format"}
+        try:
+            client = genai.Client(api_key=api_key)
+            client.models.list()
+            return {"healthy": True, "detail": "OK"}
+        except gerrors.APIError as e:
+            return {"healthy": False, "detail": f"API error: {e.status}"}
+        except Exception as e:
+            return {"healthy": False, "detail": f"Unexpected error: {type(e).__name__}"}
 
     # ======================================================
     # SAFE MESSAGE SENDER WITH CONFIGURABLE RETRY + BACKOFF
@@ -179,6 +217,17 @@ class Agent:
         """
         if max_retries is None:
             max_retries = settings.max_retries
+
+        if not self.rate_limiter.acquire():
+            self.logger.error(
+                "rate_limit_exceeded",
+                max_requests=settings.rate_limit_requests,
+                window_seconds=settings.rate_limit_window_seconds,
+            )
+            raise RuntimeError(
+                f"Rate limit exceeded: {settings.rate_limit_requests} requests "
+                f"per {settings.rate_limit_window_seconds}s"
+            )
 
         backoff = settings.initial_backoff_seconds
         max_backoff = settings.max_backoff_seconds
@@ -233,7 +282,12 @@ class Agent:
 
         Returns the final text response from the model.
         """
-        self.guardrails.validate_input(task)
+        try:
+            self.guardrails.validate_input(task)
+        except ValueError as e:
+            raise AgentError(
+                str(e), code="VALIDATION_ERROR", max_length=settings.max_prompt_length
+            ) from e
 
         correlation_id = str(uuid.uuid4())
         start_time = time.perf_counter()

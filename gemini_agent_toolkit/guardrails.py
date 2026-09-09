@@ -11,7 +11,7 @@ BLOCKED_PATTERNS = [
     re.compile(r"rm\s+-rf\s+\.\*", re.IGNORECASE),
     re.compile(r"DROP\s+TABLE", re.IGNORECASE),
     re.compile(r"DELETE\s+FROM\s+\w+\s+WHERE\s+", re.IGNORECASE),
-    re.compile(r"DROP\s+DOLUMN", re.IGNORECASE),
+    re.compile(r"DROP\s+COLUMN", re.IGNORECASE),
     re.compile(r"TRUNCATE\s+TABLE", re.IGNORECASE),
     re.compile(r">\s*/dev/sd", re.IGNORECASE),
     re.compile(r"format\s+[a-z]:", re.IGNORECASE),

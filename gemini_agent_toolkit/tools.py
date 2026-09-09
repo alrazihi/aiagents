@@ -3,6 +3,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from gemini_agent_toolkit.config import settings
+
 
 def get_base_dir() -> str:
     """Return the real working directory, resolved against symlinks.
@@ -138,7 +140,7 @@ def execute_command(command: str) -> str:
             cwd=base,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=settings.command_timeout_seconds,
         )
 
         stdout = result.stdout.strip()
@@ -153,7 +155,9 @@ def execute_command(command: str) -> str:
         return "Command executed successfully with no output."
 
     except subprocess.TimeoutExpired:
-        return "Error: Command timed out after 30 seconds."
+        return (
+            f"Error: Command timed out after {settings.command_timeout_seconds} seconds."
+        )
     except FileNotFoundError:
         return f"Error: Command not found: {parts[0]}"
     except Exception as e:

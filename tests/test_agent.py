@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import google.genai.errors as gerrors
 import pytest
 from google.genai.errors import (
     ClientError,
@@ -11,9 +12,11 @@ from gemini_agent_toolkit.agent import (
     NON_RETRYABLE_STATUSES,
     RETRYABLE_STATUSES,
     Agent,
+    AgentError,
     _is_non_retryable_error,
     _is_retryable_error,
 )
+from gemini_agent_toolkit.observability import RateLimiter
 
 # -------- Mock response helpers -------- #
 
@@ -252,20 +255,23 @@ def test_run_task_returns_final_text(agent):
 
 def test_run_task_validates_empty_input(agent):
     a, _ = agent
-    with pytest.raises(ValueError):
+    with pytest.raises(AgentError) as exc_info:
         a.run_task("")
+    assert exc_info.value.code == "VALIDATION_ERROR"
 
 
 def test_run_task_validates_whitespace_input(agent):
     a, _ = agent
-    with pytest.raises(ValueError):
+    with pytest.raises(AgentError) as exc_info:
         a.run_task("   ")
+    assert exc_info.value.code == "VALIDATION_ERROR"
 
 
 def test_run_task_validates_long_input(agent):
     a, _ = agent
-    with pytest.raises(ValueError):
+    with pytest.raises(AgentError) as exc_info:
         a.run_task("x" * 5000)
+    assert exc_info.value.code == "VALIDATION_ERROR"
 
 
 def test_run_task_tool_call_allowed(agent, tmp_path, monkeypatch):
@@ -438,3 +444,83 @@ def test_execute_tool_invalid_args(agent):
     a, _ = agent
     result = a._execute_tool(_make_tool_call("read_file", {"invalid_arg": "val"}))
     assert "Error" in result
+
+
+# -------- AgentError / health_check -------- #
+
+def test_run_task_raises_agent_error_on_empty_input(agent):
+    a, _ = agent
+    with pytest.raises(AgentError) as exc_info:
+        a.run_task("")
+    assert exc_info.value.code == "VALIDATION_ERROR"
+
+
+def test_run_task_raises_agent_error_on_whitespace_input(agent):
+    a, _ = agent
+    with pytest.raises(AgentError) as exc_info:
+        a.run_task("   ")
+    assert exc_info.value.code == "VALIDATION_ERROR"
+
+
+def test_run_task_raises_agent_error_on_oversized_input(agent):
+    a, _ = agent
+    with pytest.raises(AgentError) as exc_info:
+        a.run_task("x" * 5000)
+    assert exc_info.value.code == "VALIDATION_ERROR"
+    assert "max_length" in exc_info.value.details
+
+
+def test_agent_error_to_dict():
+    err = AgentError("test message", code="TEST_CODE", detail="info")
+    assert err.to_dict() == {
+        "code": "TEST_CODE",
+        "message": "test message",
+        "detail": "info",
+    }
+
+
+@patch("gemini_agent_toolkit.agent.genai")
+def test_health_check_valid_key(mock_genai):
+    mock_client = MagicMock()
+    mock_genai.Client.return_value = mock_client
+    mock_client.models.list.return_value = []
+    result = Agent.health_check("valid-api-key-1234567890")
+    assert result == {"healthy": True, "detail": "OK"}
+
+
+@patch("gemini_agent_toolkit.agent.genai")
+def test_health_check_invalid_key_format(mock_genai):
+    result = Agent.health_check("short")
+    assert result["healthy"] is False
+    assert "Invalid API key" in result["detail"]
+
+
+@patch("gemini_agent_toolkit.agent.genai")
+def test_health_check_api_error(mock_genai):
+    mock_client = MagicMock()
+    mock_genai.Client.return_value = mock_client
+    mock_client.models.list.side_effect = gerrors.ServerError(
+        500, {"error": {"status": "INTERNAL"}}
+    )
+    result = Agent.health_check("valid-api-key-1234567890")
+    assert result["healthy"] is False
+    assert "API error" in result["detail"]
+
+
+def test_safe_send_blocks_rate_limit(agent):
+    a, _ = agent
+    a.rate_limiter = RateLimiter(max_requests=0, window_seconds=1.0)
+    with pytest.raises(RuntimeError, match="Rate limit exceeded"):
+        a.safe_send("test")
+
+
+def test_run_task_logs_rate_limit_event(agent, caplog):
+    a, _ = agent
+    a.rate_limiter = RateLimiter(max_requests=0, window_seconds=1.0)
+    with pytest.raises(RuntimeError):
+        a.run_task("Hello")
+    logged = any(
+        "rate_limit" in record.getMessage()
+        for record in caplog.records
+    )
+    assert logged
